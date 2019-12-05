@@ -109,43 +109,12 @@ func main() {
 		name := split[0]
 		value := split[1]
 
-		// e.g. my-akv-secret-name@azurekeyvault?some-sub-key
 		if strings.Contains(value, envLookupKey) {
-			// e.g. my-akv-secret-name?some-sub-key
-			log.Debugf("%s found env var '%s' to get azure key vault secret for", logPrefix, value)
-			secretName := strings.Join(strings.Split(value, envLookupKey), "")
-
-			if secretName == "" {
-				log.Fatalf("%s error extracting secret name from env variable '%s' - not properly formatted", logPrefix, value)
-			}
-
-			var secretQuery string
-			if query := strings.Split(secretName, "?"); len(query) > 1 {
-				if len(query) > 2 {
-					log.Fatalf("%s error extracting secret query from '%s' - has multiple query elements defined with '?' - only one supported", logPrefix, secretName)
-				}
-				secretName = query[0]
-				secretQuery = query[1]
-				log.Debugf("%s found query in env var '%s', '%s'", logPrefix, value, secretQuery)
-			}
-
-			log.Debugf("%s getting azurekeyvaultsecret resource '%s' from kubernetes", logPrefix, secretName)
-			keyVaultSecretSpec, err := azureKeyVaultSecretClient.AzurekeyvaultV1alpha1().AzureKeyVaultSecrets(namespace).Get(secretName, v1.GetOptions{})
+			secret, err := getSecretFromEnvValueString(azureKeyVaultSecretClient, vaultService, namespace, value)
 			if err != nil {
-				log.Fatalf("%s error getting azurekeyvaultsecret resource '%s', error: %s", logPrefix, secretName, err.Error())
+				log.Fatalf("%s failed to find secret for '%s', error: %s", logPrefix, value, err.Error())
 			}
-
-			log.Debugf("%s getting secret value for '%s' from azure key vault", logPrefix, keyVaultSecretSpec.Spec.Vault.Object.Name)
-			secret, err := getSecretFromKeyVault(keyVaultSecretSpec, secretQuery, vaultService)
-			if err != nil {
-				log.Fatalf("%s failed to read secret '%s', error %+v", logPrefix, keyVaultSecretSpec.Spec.Vault.Object.Name, err)
-			}
-
-			if secret == "" {
-				log.Fatalf("%s secret not found in azure key vault: %s", logPrefix, keyVaultSecretSpec.Spec.Vault.Object.Name)
-			} else {
-				environ[i] = fmt.Sprintf("%s=%s", name, secret)
-			}
+			environ[i] = fmt.Sprintf("%s=%s", name, secret)
 		}
 	}
 
@@ -165,6 +134,43 @@ func main() {
 
 	log.Debugf("%s azure key vault env injector successfully injected env variables with secrets", logPrefix)
 	log.Debugf("%s azure key vault env injector", logPrefix)
+}
+
+func getSecretFromEnvValueString(azureKeyVaultSecretClient *clientset.Clientset, vaultService vault.Service, namespace string, value string) (string, error) {
+	log.Debugf("%s found env var '%s' to get azure key vault secret for", logPrefix, value)
+	secretName := strings.Join(strings.Split(value, envLookupKey), "")
+
+	if secretName == "" {
+		return "", fmt.Errorf("%s error extracting secret name from env variable '%s' - not properly formatted", logPrefix, value)
+	}
+
+	var secretQuery string
+	if query := strings.Split(secretName, "?"); len(query) > 1 {
+		if len(query) > 2 {
+			return "", fmt.Errorf("%s error extracting secret query from '%s' - has multiple query elements defined with '?' - only one supported", logPrefix, secretName)
+		}
+		secretName = query[0]
+		secretQuery = query[1]
+		log.Debugf("%s found query in env var '%s', '%s'", logPrefix, value, secretQuery)
+	}
+
+	log.Debugf("%s getting azurekeyvaultsecret resource '%s' from kubernetes", logPrefix, secretName)
+	keyVaultSecretSpec, err := azureKeyVaultSecretClient.AzurekeyvaultV1alpha1().AzureKeyVaultSecrets(namespace).Get(secretName, v1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("%s error getting azurekeyvaultsecret resource '%s', error: %s", logPrefix, secretName, err.Error())
+	}
+
+	log.Debugf("%s getting secret value for '%s' from azure key vault", logPrefix, keyVaultSecretSpec.Spec.Vault.Object.Name)
+	secret, err := getSecretFromKeyVault(keyVaultSecretSpec, secretQuery, vaultService)
+	if err != nil {
+		return "", fmt.Errorf("%s failed to read secret '%s', error %+v", logPrefix, keyVaultSecretSpec.Spec.Vault.Object.Name, err)
+	}
+
+	if secret == "" {
+		return "", fmt.Errorf("%s secret not found in azure key vault: %s", logPrefix, keyVaultSecretSpec.Spec.Vault.Object.Name)
+	}
+
+	return secret, nil
 }
 
 func getSecretFromKeyVault(azureKeyVaultSecret *vaultSecretv1alpha1.AzureKeyVaultSecret, query string, vaultService vault.Service) (string, error) {
